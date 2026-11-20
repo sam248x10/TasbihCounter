@@ -1,1 +1,483 @@
 "# TasbihCounter" 
+mkdir -p .github/workflows app/src/main/res/values app/src/main/java/com/tasbih/counter
+
+cat << 'EOF' > .github/workflows/build-apk.yml
+name: Build Android APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.7'
+
+      - name: Build Debug APK
+        run: gradle assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Tasbih-Counter-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
+EOF
+
+cat << 'EOF' > settings.gradle.kts
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+rootProject.name = "TasbihCounter"
+include(":app")
+EOF
+
+cat << 'EOF' > build.gradle.kts
+plugins {
+    id("com.android.application") version "8.5.0" apply false
+    id("org.jetbrains.kotlin.android") version "1.9.24" apply false
+}
+EOF
+
+cat << 'EOF' > gradle.properties
+org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+android.useAndroidX=true
+kotlin.code.style=official
+EOF
+
+cat << 'EOF' > app/build.gradle.kts
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+}
+
+android {
+    namespace = "com.tasbih.counter"
+    compileSdk = 34
+
+    defaultConfig {
+        applicationId = "com.tasbih.counter"
+        minSdk = 24
+        targetSdk = 34
+        versionCode = 1
+        versionName = "1.0"
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+        }
+    }
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+}
+
+dependencies {
+    implementation("androidx.core:core-ktx:1.13.1")
+    implementation("androidx.appcompat:appcompat:1.7.0")
+    implementation("androidx.media:media:1.7.0")
+}
+EOF
+
+cat << 'EOF' > app/src/main/res/values/themes.xml
+<resources>
+    <style name="Theme.Tasbih" parent="Theme.AppCompat.NoActionBar">
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowBackground">#090D16</item>
+    </style>
+</resources>
+EOF
+
+cat << 'EOF' > app/src/main/AndroidManifest.xml
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <application
+        android:allowBackup="true"
+        android:label="مسبحة"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Tasbih">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:screenOrientation="portrait">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".VolumeCounterService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
+    </application>
+</manifest>
+EOF
+
+cat << 'EOF' > app/src/main/java/com/tasbih/counter/TasbihCanvasView.kt
+package com.tasbih.counter
+
+import android.content.Context
+import android.graphics.*
+import android.view.View
+import kotlin.math.cos
+import kotlin.math.min
+import kotlin.math.sin
+
+class TasbihCanvasView(context: Context) : View(context) {
+
+    var count: Int = 0
+        set(value) {
+            field = value
+            invalidate()
+        }
+
+    private val totalBeads = 33
+    private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#090D16") }
+    private val centerCirclePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#131B2E") }
+    private val ringStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 6f
+        color = Color.parseColor("#1E293B")
+    }
+    private val beadPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE
+        textAlign = Paint.Align.CENTER
+        typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+    }
+
+    private val grayColor = Color.parseColor("#CBD5E1")
+    private val activeColors = intArrayOf(
+        Color.parseColor("#06B6D4"),
+        Color.parseColor("#3B82F6"),
+        Color.parseColor("#8B5CF6")
+    )
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), bgPaint)
+
+        val cx = width / 2f
+        val cy = height / 2f
+        val baseRadius = min(width, height) * 0.34f
+        val centerRadius = baseRadius * 0.62f
+        val beadRadius = baseRadius * 0.085f
+
+        canvas.drawCircle(cx, cy, centerRadius, centerCirclePaint)
+        canvas.drawCircle(cx, cy, centerRadius, ringStrokePaint)
+
+        val coloredBeads = if (count == 0) 0 else {
+            val mod = count % totalBeads
+            if (mod == 0) totalBeads else mod
+        }
+
+        for (i in 0 until totalBeads) {
+            val angle = Math.toRadians((i * (360.0 / totalBeads)) - 90.0)
+            val bx = cx + (baseRadius * cos(angle)).toFloat()
+            val by = cy + (baseRadius * sin(angle)).toFloat()
+
+            beadPaint.color = if (i < coloredBeads) {
+                activeColors[i % activeColors.size]
+            } else {
+                grayColor
+            }
+            canvas.drawCircle(bx, by, beadRadius, beadPaint)
+        }
+
+        textPaint.textSize = centerRadius * 0.55f
+        val textY = cy - ((textPaint.descent() + textPaint.ascent()) / 2f)
+        canvas.drawText(count.toString(), cx, textY, textPaint)
+    }
+}
+EOF
+
+cat << 'EOF' > app/src/main/java/com/tasbih/counter/VolumeCounterService.kt
+package com.tasbih.counter
+
+import android.app.*
+import android.content.Context
+import android.content.Intent
+import android.media.AudioAttributes
+import android.media.AudioFormat
+import android.media.AudioTrack
+import android.os.*
+import android.support.v4.media.session.MediaSessionCompat
+import android.support.v4.media.session.PlaybackStateCompat
+import androidx.core.app.NotificationCompat
+import androidx.media.VolumeProviderCompat
+
+class VolumeCounterService : Service() {
+
+    private lateinit var mediaSession: MediaSessionCompat
+    private var silentTrack: AudioTrack? = null
+
+    companion object {
+        const val ACTION_COUNT_UPDATED = "com.tasbih.counter.UPDATED"
+        const val PREFS_NAME = "TasbihPrefs"
+        const val KEY_COUNT = "count"
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        createNotificationChannel()
+        startForeground(1, buildNotification())
+        startSilentAudioKeepAlive()
+        setupMediaSession()
+    }
+
+    private fun startSilentAudioKeepAlive() {
+        val sampleRate = 8000
+        val bufferSize = AudioTrack.getMinBufferSize(
+            sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT
+        )
+        silentTrack = AudioTrack.Builder()
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .build()
+            )
+            .setAudioFormat(
+                AudioFormat.Builder()
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                    .setSampleRate(sampleRate)
+                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                    .build()
+            )
+            .setBufferSizeInBytes(bufferSize)
+            .setTransferMode(AudioTrack.MODE_STATIC)
+            .build()
+
+        val silence = ByteArray(bufferSize)
+        silentTrack?.write(silence, 0, silence.size)
+        silentTrack?.setLoopPoints(0, silence.size / 2, -1)
+        silentTrack?.play()
+    }
+
+    private fun setupMediaSession() {
+        mediaSession = MediaSessionCompat(this, "TasbihVolumeSession").apply {
+            setPlaybackState(
+                PlaybackStateCompat.Builder()
+                    .setState(PlaybackStateCompat.STATE_PLAYING, 0, 1f)
+                    .build()
+            )
+
+            val volumeProvider = object : VolumeProviderCompat(VOLUME_CONTROL_RELATIVE, 100, 50) {
+                override fun onAdjustVolume(direction: Int) {
+                    if (direction == 1 || direction == -1) {
+                        incrementCounter()
+                    }
+                }
+            }
+            setPlaybackToRemote(volumeProvider)
+            isActive = true
+        }
+    }
+
+    private fun incrementCounter() {
+        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val nextCount = prefs.getInt(KEY_COUNT, 0) + 1
+        prefs.edit().putInt(KEY_COUNT, nextCount).apply()
+
+        val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            vibrator.vibrate(VibrationEffect.createOneShot(35, VibrationEffect.DEFAULT_AMPLITUDE))
+        } else {
+            @Suppress("DEPRECATION")
+            vibrator.vibrate(35)
+        }
+
+        sendBroadcast(Intent(ACTION_COUNT_UPDATED).setPackage(packageName))
+    }
+
+    private fun buildNotification(): Notification {
+        return NotificationCompat.Builder(this, "tasbih_channel")
+            .setContentTitle("المسبحة نشطة في الخلفية")
+            .setContentText("اضغط رفع أو خفض الصوت للعدّ حتى والشاشة مطفية")
+            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setOngoing(true)
+            .build()
+    }
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                "tasbih_channel", "خدمة عدّاد الصوت", NotificationManager.IMPORTANCE_LOW
+            )
+            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+        }
+    }
+
+    override fun onDestroy() {
+        silentTrack?.stop()
+        silentTrack?.release()
+        mediaSession.release()
+        super.onDestroy()
+    }
+
+    override fun onBind(intent: Intent?) = null
+}
+EOF
+
+cat << 'EOF' > app/src/main/java/com/tasbih/counter/MainActivity.kt
+package com.tasbih.counter
+
+import android.Manifest
+import android.content.*
+import android.content.pm.PackageManager
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
+import android.os.Build
+import android.os.Bundle
+import android.view.Gravity
+import android.view.KeyEvent
+import android.widget.Button
+import android.widget.FrameLayout
+import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
+
+class MainActivity : AppCompatActivity() {
+
+    private lateinit var canvasView: TasbihCanvasView
+    private lateinit var prefs: SharedPreferences
+
+    private val updateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            refreshCount()
+        }
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        prefs = getSharedPreferences(VolumeCounterService.PREFS_NAME, Context.MODE_PRIVATE)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+                != PackageManager.PERMISSION_GRANTED
+            ) {
+                ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 101)
+            }
+        }
+
+        val serviceIntent = Intent(this, VolumeCounterService::class.java)
+        ContextCompat.startForegroundService(this, serviceIntent)
+
+        val rootLayout = FrameLayout(this).apply {
+            setPadding(0, 0, 0, 0)
+        }
+
+        canvasView = TasbihCanvasView(this).apply {
+            count = prefs.getInt(VolumeCounterService.KEY_COUNT, 0)
+            setOnClickListener {
+                val next = prefs.getInt(VolumeCounterService.KEY_COUNT, 0) + 1
+                prefs.edit().putInt(VolumeCounterService.KEY_COUNT, next).apply()
+                count = next
+            }
+        }
+        rootLayout.addView(
+            canvasView,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        )
+
+        val resetBtn = Button(this).apply {
+            text = "تصفير العداد"
+            setTextColor(Color.WHITE)
+            textSize = 18f
+            isAllCaps = false
+            background = GradientDrawable(
+                GradientDrawable.Orientation.LEFT_RIGHT,
+                intArrayOf(
+                    Color.parseColor("#8B5CF6"),
+                    Color.parseColor("#3B82F6"),
+                    Color.parseColor("#06B6D4")
+                )
+            )
+            setOnClickListener {
+                prefs.edit().putInt(VolumeCounterService.KEY_COUNT, 0).apply()
+                canvasView.count = 0
+            }
+        }
+        val topParams = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            150,
+            Gravity.TOP
+        ).apply {
+            setMargins(0, 0, 0, 0)
+        }
+        rootLayout.addView(resetBtn, topParams)
+
+        setContentView(rootLayout)
+    }
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
+            val next = prefs.getInt(VolumeCounterService.KEY_COUNT, 0) + 1
+            prefs.edit().putInt(VolumeCounterService.KEY_COUNT, next).apply()
+            canvasView.count = next
+            return true
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+
+    private fun refreshCount() {
+        canvasView.count = prefs.getInt(VolumeCounterService.KEY_COUNT, 0)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        refreshCount()
+        ContextCompat.registerReceiver(
+            this,
+            updateReceiver,
+            IntentFilter(VolumeCounterService.ACTION_COUNT_UPDATED),
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
+    }
+
+    override fun onPause() {
+        unregisterReceiver(updateReceiver)
+        super.onPause()
+    }
+}
+EOF
