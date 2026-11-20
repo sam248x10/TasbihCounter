@@ -98,8 +98,8 @@ class VolumeCounterService : Service() {
 
     private fun buildNotification(): Notification {
         return NotificationCompat.Builder(this, "tasbih_channel")
-            .setContentTitle("ط§ظ„ظ…ط³ط¨ط­ط© ظ†ط´ط·ط© ظپظٹ ط§ظ„ط®ظ„ظپظٹط©")
-            .setContentText("ط§ط¶ط؛ط· ط±ظپط¹ ط£ظˆ ط®ظپط¶ ط§ظ„طµظˆطھ ظ„ظ„ط¹ط¯ظ‘ ط­طھظ‰ ظˆط§ظ„ط´ط§ط´ط© ظ…ط·ظپظٹط©")
+            .setContentTitle("المسبحة نشطة في الخلفية")
+            .setContentText("اضغط رفع أو خفض الصوت للعدّ حتى والشاشة مطفية")
             .setSmallIcon(android.R.drawable.ic_media_play)
             .setOngoing(true)
             .build()
@@ -108,7 +108,7 @@ class VolumeCounterService : Service() {
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
-                "tasbih_channel", "ط®ط¯ظ…ط© ط¹ط¯ظ‘ط§ط¯ ط§ظ„طµظˆطھ", NotificationManager.IMPORTANCE_LOW
+                "tasbih_channel", "خدمة عدّاد الصوت", NotificationManager.IMPORTANCE_LOW
             )
             getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }

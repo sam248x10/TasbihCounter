@@ -62,16 +62,16 @@ class MainActivity : AppCompatActivity() {
         )
 
         val resetBtn = Button(this).apply {
-            text = "طھطµظپظٹط± ط§ظ„ط¹ط¯ط§ط¯"
+            text = "تصفير العداد"
             setTextColor(Color.WHITE)
             textSize = 18f
             isAllCaps = false
             background = GradientDrawable(
                 GradientDrawable.Orientation.LEFT_RIGHT,
                 intArrayOf(
-                    Color.parseColor("#8B5CF6"),
-                    Color.parseColor("#3B82F6"),
-                    Color.parseColor("#06B6D4")
+                    Color.parseColor("#126C72"),
+                    Color.parseColor("#1F409F"),
+                    Color.parseColor("#6022A9")
                 )
             )
             setOnClickListener {
