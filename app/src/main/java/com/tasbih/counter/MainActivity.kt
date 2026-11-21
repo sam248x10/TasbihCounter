@@ -1,7 +1,6 @@
 package com.tasbih.counter
 
 import android.content.ActivityNotFoundException
-import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.res.ColorStateList
@@ -12,8 +11,11 @@ import android.media.AudioManager
 import android.media.ToneGenerator
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.Gravity
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.View
 import android.widget.Button
 import android.widget.FrameLayout
@@ -24,12 +26,12 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
+import kotlin.math.abs
 
 class MainActivity : AppCompatActivity() {
 
     private companion object {
-        const val PREFS_NAME = "TasbihPrefs"
-        const val KEY_COUNT = "count"
         const val KEY_DHIKR = "selected_dhikr"
     }
 
@@ -46,6 +48,7 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var canvasView: TasbihCanvasView
     private lateinit var prefs: SharedPreferences
+    private lateinit var counter: TasbihCounter
     private lateinit var cycleLabel: TextView
     private lateinit var soundButton: ImageButton
     private lateinit var dhikrText: TextView
@@ -53,10 +56,19 @@ class MainActivity : AppCompatActivity() {
     private var selectedDhikr: Dhikr? = null
     private var clickTone: ToneGenerator? = null
     private var soundEnabled = true
+    private val handler = Handler(Looper.getMainLooper())
+    private val lockedCounterIntent by lazy { Intent(this, LockedCounterService::class.java) }
+    private val stopCounterIfUnlocked = Runnable {
+        if (!isScreenLocked()) stopService(lockedCounterIntent)
+    }
+    private var swipeStartX = 0f
+    private var swipeStartY = 0f
+    private var singlePointerSwipe = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        counter = TasbihCounter(this)
+        prefs = counter.prefs
         soundEnabled = prefs.getBoolean("click_sound_enabled", true)
         selectedDhikr = Dhikr.values().firstOrNull { it.name == prefs.getString(KEY_DHIKR, null) }
 
@@ -88,7 +100,7 @@ class MainActivity : AppCompatActivity() {
                 )
             )
             setOnClickListener {
-                prefs.edit().putInt(KEY_COUNT, 0).apply()
+                counter.reset()
                 refreshCount()
             }
         }
@@ -201,6 +213,33 @@ class MainActivity : AppCompatActivity() {
         updateDhikrDisplay(animate = true)
     }
 
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                swipeStartX = event.x
+                swipeStartY = event.y
+                singlePointerSwipe = true
+            }
+            MotionEvent.ACTION_POINTER_DOWN, MotionEvent.ACTION_CANCEL -> singlePointerSwipe = false
+            MotionEvent.ACTION_UP -> {
+                val dx = event.x - swipeStartX
+                val dy = event.y - swipeStartY
+                if (singlePointerSwipe && abs(dx) >= dp(60) && abs(dx) > abs(dy) * 1.5f) {
+                    val cancel = MotionEvent.obtain(event)
+                    cancel.action = MotionEvent.ACTION_CANCEL
+                    super.dispatchTouchEvent(cancel)
+                    cancel.recycle()
+                    val items = Dhikr.values()
+                    val next = if (dx < 0) (selectedDhikr?.ordinal ?: -1) + 1
+                        else (selectedDhikr?.ordinal ?: items.size) - 1
+                    items.getOrNull(next)?.let { selectDhikr(it) }
+                    return true
+                }
+            }
+        }
+        return super.dispatchTouchEvent(event)
+    }
+
     private fun showSettings() {
         val panel = dialogPanel("الإعدادات")
         val versionName = packageManager.getPackageInfo(packageName, 0).versionName
@@ -217,13 +256,37 @@ class MainActivity : AppCompatActivity() {
             topMargin = dp(10)
             bottomMargin = dp(16)
         })
+        panel.addView(arabicText("عدد التسبيحات في الدورة", 16f, 0xFFD6E4EB.toInt()))
+        val cycleOptions = LinearLayout(this).apply { layoutDirection = View.LAYOUT_DIRECTION_RTL }
+        val cycleButtons = listOf(33, 100).associateWith { size ->
+            actionButton(if (size == 33) "٣٣" else "١٠٠", size == counter.cycleSize).also {
+                cycleOptions.addView(it, LinearLayout.LayoutParams(0, -2, 1f).apply {
+                    marginStart = dp(3)
+                    marginEnd = dp(3)
+                })
+            }
+        }
+        cycleButtons.forEach { (size, button) ->
+            button.setOnClickListener {
+                counter.cycleSize = size
+                cycleButtons.forEach { (value, option) ->
+                    option.isSelected = value == size
+                    option.background = actionBackground(option.isSelected)
+                }
+                refreshCount()
+            }
+        }
+        panel.addView(cycleOptions, LinearLayout.LayoutParams(-1, -2).apply {
+            topMargin = dp(6)
+            bottomMargin = dp(12)
+        })
         panel.addView(arabicText(
-            "المس الشاشة أو اضغط زر رفع الصوت أو خفضه لزيادة العداد. كل ٣٣ تسبيحة تكمل دورة واحدة.",
+            "انقر للعد. اسحب لليسار للذكر التالي أو لليمين للذكر السابق.",
             16f,
             0xFFD6E4EB.toInt()
         ))
         panel.addView(arabicText(
-            "يمكنك كتم صوت النقرة من زر الصوت. عند مغادرة المسبحة يعود الزران للتحكم بالصوت.",
+            "يمكنك استخدام أزرار الصوت للعد داخل المسبحة وأزرار السماعة أثناء إطفاء الشاشة من داخلها.",
             15f,
             0xFFA2ADC2.toInt()
         ), LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
@@ -382,8 +445,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun incrementCount() {
-        val next = prefs.getInt(KEY_COUNT, 0) + 1
-        prefs.edit().putInt(KEY_COUNT, next).apply()
+        counter.increment()
         refreshCount()
     }
 
@@ -394,20 +456,30 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun refreshCount() {
-        val count = prefs.getInt(KEY_COUNT, 0)
-        canvasView.count = count
-        cycleLabel.text = "الدورة: ${count / TasbihCanvasView.BEADS_PER_CYCLE}"
+        canvasView.cycleSize = counter.cycleSize
+        canvasView.count = counter.count
+        cycleLabel.text = "الدورات: ${counter.count / counter.cycleSize} · ${counter.count % counter.cycleSize}/${counter.cycleSize}"
     }
 
     override fun onResume() {
         super.onResume()
+        handler.removeCallbacks(stopCounterIfUnlocked)
+        LockedCounterService.activityVisible = true
+        ContextCompat.startForegroundService(this, lockedCounterIntent)
         clickTone = runCatching { ToneGenerator(AudioManager.STREAM_MUSIC, 35) }.getOrNull()
         refreshCount()
     }
 
     override fun onPause() {
+        LockedCounterService.activityVisible = false
+        handler.postDelayed(stopCounterIfUnlocked, 250L)
         clickTone?.release()
         clickTone = null
         super.onPause()
+    }
+
+    override fun onUserLeaveHint() {
+        stopService(lockedCounterIntent)
+        super.onUserLeaveHint()
     }
 }

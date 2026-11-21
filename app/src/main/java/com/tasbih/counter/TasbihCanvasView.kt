@@ -13,7 +13,7 @@ import kotlin.math.sin
 class TasbihCanvasView(context: Context) : View(context) {
 
     companion object {
-        const val BEADS_PER_CYCLE = 33
+        private const val BEAD_COUNT = 33
         private const val CENTER_POSITION = 0.54f
         private const val LOWER_POSITION = 0.69f
         const val MOVE_DURATION = 320L
@@ -54,6 +54,7 @@ class TasbihCanvasView(context: Context) : View(context) {
             field = value
             invalidate()
         }
+    var cycleSize = 33
 
     private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val rippleStarts = mutableListOf<Long>()
@@ -143,12 +144,13 @@ class TasbihCanvasView(context: Context) : View(context) {
         canvas.restore()
 
         val beadIndex = (count - 1).coerceAtLeast(0)
-        val level = beadIndex / BEADS_PER_CYCLE % activeBeads.size
-        val coloredBeads = if (count == 0) 0 else beadIndex % BEADS_PER_CYCLE + 1
+        val level = beadIndex / cycleSize % activeBeads.size
+        val progress = if (count == 0) 0 else beadIndex % cycleSize + 1
+        val coloredBeads = progress * BEAD_COUNT / cycleSize
         glowPaint.shader = glowShaders[level]
 
-        for (i in 0 until BEADS_PER_CYCLE) {
-            val angle = Math.toRadians((i * (360.0 / BEADS_PER_CYCLE)) - 90.0)
+        for (i in 0 until BEAD_COUNT) {
+            val angle = Math.toRadians((i * (360.0 / BEAD_COUNT)) - 90.0)
             val bx = cx + (baseRadius * cos(angle)).toFloat()
             val by = cy + (baseRadius * sin(angle)).toFloat()
 
