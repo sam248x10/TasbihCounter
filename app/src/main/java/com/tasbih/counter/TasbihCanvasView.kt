@@ -57,18 +57,17 @@ class TasbihCanvasView(context: Context) : View(context) {
     var cycleSize = 33
 
     private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val rippleStarts = mutableListOf<Long>()
+    private data class TapRipple(val x: Float, val y: Float, val startedAt: Long)
+
+    private val tapRipples = mutableListOf<TapRipple>()
     private val ripplePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
-        shader = SweepGradient(
-            0f, 0f,
-            intArrayOf(0xFF45E5CC.toInt(), 0xFF62A5FF.toInt(), 0xFFBA88FF.toInt(), 0xFF45E5CC.toInt()),
-            null
-        )
+        color = 0xFFBCC7E4.toInt()
+        strokeWidth = resources.displayMetrics.density * 1.5f
     }
 
-    fun playTapRipple() {
-        rippleStarts.add(SystemClock.uptimeMillis())
+    fun playTapRipple(x: Float, y: Float) {
+        tapRipples.add(TapRipple(x, y, SystemClock.uptimeMillis()))
         invalidate()
     }
     private val centerCirclePaint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -166,20 +165,17 @@ class TasbihCanvasView(context: Context) : View(context) {
             canvas.restore()
         }
 
-        if (rippleStarts.isNotEmpty()) {
+        if (tapRipples.isNotEmpty()) {
             val now = SystemClock.uptimeMillis()
-            rippleStarts.removeAll { now - it >= RIPPLE_DURATION }
-            canvas.save()
-            canvas.translate(cx, cy)
-            for (started in rippleStarts) {
-                val progress = (now - started).toFloat() / RIPPLE_DURATION
+            val density = resources.displayMetrics.density
+            tapRipples.removeAll { now - it.startedAt >= RIPPLE_DURATION }
+            for (ripple in tapRipples) {
+                val progress = (now - ripple.startedAt).toFloat() / RIPPLE_DURATION
                 val eased = 1f - (1f - progress) * (1f - progress)
-                ripplePaint.alpha = (210 * (1f - progress)).toInt()
-                ripplePaint.strokeWidth = baseRadius * (0.035f - 0.02f * progress)
-                canvas.drawCircle(0f, 0f, baseRadius * (0.68f + 0.52f * eased), ripplePaint)
+                ripplePaint.alpha = (110 * (1f - progress)).toInt()
+                canvas.drawCircle(ripple.x, ripple.y, density * (6f + 52f * eased), ripplePaint)
             }
-            canvas.restore()
-            if (rippleStarts.isNotEmpty()) postInvalidateOnAnimation()
+            if (tapRipples.isNotEmpty()) postInvalidateOnAnimation()
         }
 
         labelPaint.color = 0xFF85C2C9.toInt()

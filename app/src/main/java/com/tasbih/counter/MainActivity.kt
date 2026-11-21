@@ -5,6 +5,9 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.content.res.ColorStateList
 import android.graphics.Color
+import android.graphics.PointF
+import android.graphics.Rect
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.RippleDrawable
 import android.media.AudioManager
@@ -13,12 +16,16 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.text.InputFilter
+import android.text.InputType
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.widget.Button
+import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.HorizontalScrollView
 import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -27,6 +34,9 @@ import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.widget.doAfterTextChanged
+import java.util.Calendar
+import java.util.Locale
 import kotlin.math.abs
 
 class MainActivity : AppCompatActivity() {
@@ -36,14 +46,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private enum class Dhikr(val words: String) {
-        PRAISE("سُبْحَانَ اللَّهِ وَبِحَمْدِهِ"),
-        PROTECTION("بِسْمِ اللَّهِ الَّذِي لَا يَضُرُّ مَعَ اسْمِهِ شَيْءٌ فِي الْأَرْضِ وَلَا فِي السَّمَاءِ وَهُوَ السَّمِيعُ الْعَلِيمُ"),
-        FORGIVENESS("أَسْتَغْفِرُ اللَّهَ"),
-        PEACE("اللَّهُمَّ أَنْتَ السَّلَامُ وَمِنْكَ السَّلَامُ، تَبَارَكْتَ يَا ذَا الْجَلَالِ وَالْإِكْرَامِ"),
-        GLORY("سُبْحَانَ اللَّهِ"),
-        THANKS("الْحَمْدُ لِلَّهِ"),
-        GREATNESS("اللَّهُ أَكْبَرُ"),
-        ONENESS("لَا إِلَهَ إِلَّا اللَّهُ وَحْدَهُ لَا شَرِيكَ لَهُ، لَهُ الْمُلْكُ وَلَهُ الْحَمْدُ وَهُوَ عَلَى كُلِّ شَيْءٍ قَدِيرٌ")
+        GLORY("سبحان الله"),
+        THANKS("الحمد لله"),
+        GREATNESS("الله أكبر"),
+        ONENESS("لا إله إلا الله"),
+        FORGIVENESS("استغفر الله")
     }
 
     private lateinit var canvasView: TasbihCanvasView
@@ -53,10 +60,16 @@ class MainActivity : AppCompatActivity() {
     private lateinit var soundButton: ImageButton
     private lateinit var dhikrText: TextView
     private lateinit var dhikrScroll: ScrollView
+    private lateinit var dhikrStrip: HorizontalScrollView
+    private lateinit var dhikrButtons: Map<Dhikr, Button>
+    private lateinit var dhikrNumber: TextView
+    private lateinit var greeting: TextView
+    private var tapPoint: PointF? = null
     private var selectedDhikr: Dhikr? = null
     private var clickTone: ToneGenerator? = null
     private var soundEnabled = true
     private val handler = Handler(Looper.getMainLooper())
+    private val dailyReminder = Runnable { showDailyReminder() }
     private val lockedCounterIntent by lazy { Intent(this, LockedCounterService::class.java) }
     private val stopCounterIfUnlocked = Runnable {
         if (!isScreenLocked()) stopService(lockedCounterIntent)
@@ -75,8 +88,7 @@ class MainActivity : AppCompatActivity() {
         val rootLayout = FrameLayout(this)
 
         canvasView = TasbihCanvasView(this).apply {
-            isSoundEffectsEnabled = false
-            setOnClickListener { countTap() }
+            enableCounting(this)
         }
         rootLayout.addView(
             canvasView,
@@ -91,14 +103,7 @@ class MainActivity : AppCompatActivity() {
             setTextColor(Color.WHITE)
             textSize = 18f
             isAllCaps = false
-            background = GradientDrawable(
-                GradientDrawable.Orientation.LEFT_RIGHT,
-                intArrayOf(
-                    Color.parseColor("#126C72"),
-                    Color.parseColor("#1F409F"),
-                    Color.parseColor("#6022A9")
-                )
-            )
+            background = actionBackground(selected = false)
             setOnClickListener {
                 counter.reset()
                 refreshCount()
@@ -113,7 +118,7 @@ class MainActivity : AppCompatActivity() {
             setOnClickListener { showSettings() }
         }
         soundButton = ImageButton(this).apply {
-            setColorFilter(0xFF85E1D5.toInt())
+            setColorFilter(0xFF9CAFC8.toInt())
             setBackgroundColor(0xFF11182B.toInt())
             setOnClickListener {
                 soundEnabled = !soundEnabled
@@ -130,19 +135,45 @@ class MainActivity : AppCompatActivity() {
             addView(resetBtn, LinearLayout.LayoutParams(0, -1, 1f))
         }
         cycleLabel = statusChip("", 0xFFD9C8FF.toInt())
+        dhikrNumber = statusChip("", 0xFFB6C7DF.toInt())
         val statusRow = LinearLayout(this).apply {
             gravity = Gravity.CENTER
             layoutDirection = View.LAYOUT_DIRECTION_RTL
-            addView(actionButton("اختر الأذكار", selected = true).apply {
-                setOnClickListener { showDhikrPicker() }
-            }, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(6) })
             addView(cycleLabel)
+            addView(dhikrNumber)
         }
+        val choices = LinearLayout(this).apply { layoutDirection = View.LAYOUT_DIRECTION_RTL }
+        dhikrButtons = Dhikr.values().associateWith { dhikr ->
+            actionButton(dhikr.words).apply {
+                setSingleLine(true)
+                setPadding(dp(14), dp(6), dp(14), dp(6))
+                setOnClickListener {
+                    selectDhikr(dhikr.takeUnless { it == selectedDhikr })
+                }
+                choices.addView(this, LinearLayout.LayoutParams(-2, -2).apply {
+                    marginEnd = dp(6)
+                })
+            }
+        }
+        dhikrStrip = HorizontalScrollView(this).apply {
+            layoutDirection = View.LAYOUT_DIRECTION_RTL
+            contentDescription = "التسبيح"
+            isHorizontalScrollBarEnabled = false
+            addView(choices, FrameLayout.LayoutParams(-2, -2))
+        }
+        greeting = arabicText("", 17f, 0xFFDCE3F4.toInt()).apply {
+            setTypeface(typeface, Typeface.BOLD)
+            maxLines = 2
+        }
+        updateGreeting()
         val topPanel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            addView(toolbar, LinearLayout.LayoutParams(-1, dp(52)))
+            setPadding(dp(12), dp(6), dp(12), 0)
+            addView(toolbar, LinearLayout.LayoutParams(-1, dp(48)))
+            addView(greeting, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
+            addView(dhikrStrip, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(5) })
             addView(statusRow, LinearLayout.LayoutParams(-1, -2).apply {
-                topMargin = dp(14)
+                topMargin = dp(4)
             })
         }
         rootLayout.addView(topPanel, FrameLayout.LayoutParams(-1, -2, Gravity.TOP))
@@ -151,8 +182,7 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
             setLineSpacing(dp(4).toFloat(), 1f)
             setPadding(dp(8), dp(4), dp(8), dp(4))
-            isSoundEffectsEnabled = false
-            setOnClickListener { countTap() }
+            enableCounting(this)
         }
         dhikrScroll = ScrollView(this).apply {
             visibility = View.INVISIBLE
@@ -205,6 +235,17 @@ class MainActivity : AppCompatActivity() {
         }
         dhikrText.text = dhikr?.words.orEmpty()
         dhikrScroll.scrollTo(0, 0)
+        dhikrNumber.visibility = if (dhikr == null) View.GONE else View.VISIBLE
+        dhikrNumber.text = dhikr?.let {
+            "الذكر ${"١٢٣٤٥"[it.ordinal]} من ٥"
+        }.orEmpty()
+        dhikrButtons.forEach { (choice, button) ->
+            button.isSelected = choice == dhikr
+            button.background = actionBackground(button.isSelected)
+        }
+        dhikr?.let(dhikrButtons::get)?.let { button ->
+            button.post { button.requestRectangleOnScreen(Rect(0, 0, button.width, button.height), !animate) }
+        }
     }
 
     private fun selectDhikr(dhikr: Dhikr?) {
@@ -218,7 +259,9 @@ class MainActivity : AppCompatActivity() {
             MotionEvent.ACTION_DOWN -> {
                 swipeStartX = event.x
                 swipeStartY = event.y
-                singlePointerSwipe = true
+                val stripBounds = Rect()
+                dhikrStrip.getGlobalVisibleRect(stripBounds)
+                singlePointerSwipe = !stripBounds.contains(event.rawX.toInt(), event.rawY.toInt())
             }
             MotionEvent.ACTION_POINTER_DOWN, MotionEvent.ACTION_CANCEL -> singlePointerSwipe = false
             MotionEvent.ACTION_UP -> {
@@ -240,24 +283,85 @@ class MainActivity : AppCompatActivity() {
         return super.dispatchTouchEvent(event)
     }
 
+    private fun updateGreeting() {
+        val name = prefs.getString("user_name", "").orEmpty().trim()
+        greeting.text = if (name.isEmpty()) "أهلًا وسهلًا بك" else "أهلًا بك، $name"
+    }
+
+    private fun showDailyReminder() {
+        val today = Calendar.getInstance()
+        val day = String.format(Locale.ROOT, "%04d-%03d", today.get(Calendar.YEAR), today.get(Calendar.DAY_OF_YEAR))
+        if (prefs.getString("reminder_day", null) != day) {
+            val reminders = listOf(
+                "كن من الذاكرين الله كثيرًا، واجعل للذكر نصيبًا من يومك.",
+                "جدّد صلتك بالله اليوم بذكرٍ يسير تداوم عليه.",
+                "مهما انشغلت اليوم، خصّص لحظة تذكر فيها الله."
+            )
+            val message = reminders[today.get(Calendar.DAY_OF_YEAR) % reminders.size]
+            Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+            prefs.edit().putString("reminder_day", day).apply()
+        }
+        val tomorrow = (today.clone() as Calendar).apply {
+            add(Calendar.DAY_OF_YEAR, 1)
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+        handler.removeCallbacks(dailyReminder)
+        handler.postDelayed(dailyReminder, (tomorrow.timeInMillis - System.currentTimeMillis()).coerceAtLeast(1L))
+    }
+
     private fun showSettings() {
-        val panel = dialogPanel("الإعدادات")
-        val versionName = packageManager.getPackageInfo(packageName, 0).versionName
-        panel.addView(arabicText("رقم الإصدار $versionName", 16f, 0xFFD6E4EB.toInt()))
-        panel.addView(actionButton("زيارة موقع المطور").apply {
-            setOnClickListener {
-                try {
-                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://sameerlab.com")))
-                } catch (_: ActivityNotFoundException) {
-                    Toast.makeText(this@MainActivity, "تعذّر فتح موقع المطور", Toast.LENGTH_SHORT).show()
-                }
-            }
-        }, LinearLayout.LayoutParams(-1, -2).apply {
-            topMargin = dp(10)
-            bottomMargin = dp(16)
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutDirection = View.LAYOUT_DIRECTION_RTL
+            setPadding(dp(16), dp(12), dp(16), dp(14))
+            background = borderedSurface(0xFF111827.toInt(), 0xFF34445B.toInt(), 20)
+            isFocusableInTouchMode = true
+        }
+        val dialog = createPanelDialog(panel)
+        val header = LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            addView(arabicText("إعدادات المسبحة", 21f, 0xFFC2CDE8.toInt()).apply {
+                setTypeface(typeface, Typeface.BOLD)
+            }, LinearLayout.LayoutParams(0, -2, 1f))
+            addView(actionButton("×").apply {
+                contentDescription = "إغلاق الإعدادات"
+                textSize = 23f
+                minWidth = dp(48)
+                setOnClickListener { dialog.dismiss() }
+            }, LinearLayout.LayoutParams(dp(48), dp(48)))
+        }
+        panel.addView(header, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
+
+        val cards = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        panel.addView(ScrollView(this).apply { addView(cards) }, LinearLayout.LayoutParams(-1, -2).apply {
+            weight = 1f
         })
-        panel.addView(arabicText("عدد التسبيحات في الدورة", 16f, 0xFFD6E4EB.toInt()))
-        val cycleOptions = LinearLayout(this).apply { layoutDirection = View.LAYOUT_DIRECTION_RTL }
+
+        val profile = settingsCard(cards, "اسمك")
+        profile.addView(EditText(this).apply {
+            hint = "أدخل اسمك"
+            textSize = 16f
+            setSingleLine(true)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_WORDS
+            filters = arrayOf(InputFilter.LengthFilter(40))
+            setTextColor(0xFFE2E9F7.toInt())
+            setHintTextColor(0xFFA1ADC2.toInt())
+            textDirection = View.TEXT_DIRECTION_FIRST_STRONG_RTL
+            gravity = Gravity.START or Gravity.CENTER_VERTICAL
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+            background = borderedSurface(0xFF131D30.toInt(), 0xFF414F68.toInt(), 10)
+            setText(prefs.getString("user_name", ""))
+            doAfterTextChanged {
+                prefs.edit().putString("user_name", it.toString().trim()).apply()
+                updateGreeting()
+            }
+        }, LinearLayout.LayoutParams(-1, -2))
+
+        val cycleCard = settingsCard(cards, "عدد التسبيحات في الدورة")
+        val cycleOptions = LinearLayout(this)
         val cycleButtons = listOf(33, 100).associateWith { size ->
             actionButton(if (size == 33) "٣٣" else "١٠٠", size == counter.cycleSize).also {
                 cycleOptions.addView(it, LinearLayout.LayoutParams(0, -2, 1f).apply {
@@ -276,104 +380,46 @@ class MainActivity : AppCompatActivity() {
                 refreshCount()
             }
         }
-        panel.addView(cycleOptions, LinearLayout.LayoutParams(-1, -2).apply {
-            topMargin = dp(6)
-            bottomMargin = dp(12)
-        })
-        panel.addView(arabicText(
-            "انقر للعد. اسحب لليسار للذكر التالي أو لليمين للذكر السابق.",
-            16f,
-            0xFFD6E4EB.toInt()
-        ))
-        panel.addView(arabicText(
-            "يمكنك استخدام أزرار الصوت للعد داخل المسبحة وأزرار السماعة أثناء إطفاء الشاشة من داخلها.",
-            15f,
-            0xFFA2ADC2.toInt()
-        ), LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
-        val dialog = createPanelDialog(panel)
+        cycleCard.addView(cycleOptions, LinearLayout.LayoutParams(-1, -2))
+
+        settingsCard(cards, "طريقة التسبيح").addView(arabicText(
+            "انقر للعد. اسحب لليسار للذكر التالي أو لليمين للذكر السابق. يمكنك العد بأزرار السماعة عند إطفاء الشاشة من داخل المسبحة.",
+            15f, 0xFFB8C4D8.toInt()
+        ).apply { setLineSpacing(dp(3).toFloat(), 1f) })
+
+        val developer = settingsCard(cards, "المطور")
+        val versionName = packageManager.getPackageInfo(packageName, 0).versionName
+        developer.addView(arabicText("رقم الإصدار $versionName", 14f, 0xFFB8C4D8.toInt()))
+        developer.addView(actionButton("زيارة موقع المطور").apply {
+            setOnClickListener {
+                try {
+                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://sameerlab.com")))
+                } catch (_: ActivityNotFoundException) {
+                    Toast.makeText(this@MainActivity, "تعذّر فتح موقع المطور", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
+
         panel.addView(actionButton("تم", selected = true).apply {
             setOnClickListener { dialog.dismiss() }
-        }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(18) })
+        }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
         dialog.show()
     }
 
-    private fun showDhikrPicker() {
-        val panel = dialogPanel("اختر الأذكار")
-        val dialog = createPanelDialog(panel)
-        val categories = listOf(
-            "أذكار الصباح والمساء" to listOf(Dhikr.PRAISE, Dhikr.PROTECTION),
-            "أذكار بعد الصلاة" to listOf(
-                Dhikr.FORGIVENESS, Dhikr.PEACE, Dhikr.GLORY, Dhikr.THANKS, Dhikr.GREATNESS, Dhikr.ONENESS
-            )
-        )
-        val tabs = LinearLayout(this).apply { layoutDirection = View.LAYOUT_DIRECTION_RTL }
-        panel.addView(tabs, LinearLayout.LayoutParams(-1, -2))
-        val rows = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val scroll = ScrollView(this).apply { addView(rows) }
-        panel.addView(scroll, LinearLayout.LayoutParams(
-            -1, minOf(dp(260), resources.displayMetrics.heightPixels / 3)
-        ).apply { topMargin = dp(8) })
-
-        val tabButtons = categories.map { (label, _) ->
-            actionButton(label).also {
-                tabs.addView(it, LinearLayout.LayoutParams(0, -1, 1f).apply {
-                    marginStart = dp(2)
-                    marginEnd = dp(2)
-                })
-            }
-        }
-        fun showCategory(index: Int) {
-            tabButtons.forEachIndexed { i, tab ->
-                tab.isSelected = i == index
-                tab.background = actionBackground(tab.isSelected)
-            }
-            rows.removeAllViews()
-            categories[index].second.forEach { dhikr ->
-                rows.addView(actionButton(dhikr.words, dhikr == selectedDhikr).apply {
-                    textSize = 17f
-                    layoutDirection = View.LAYOUT_DIRECTION_RTL
-                    textDirection = View.TEXT_DIRECTION_RTL
-                    gravity = Gravity.START or Gravity.CENTER_VERTICAL
-                    setOnClickListener {
-                        selectDhikr(dhikr)
-                        dialog.dismiss()
-                    }
-                }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) })
-            }
-            scroll.scrollTo(0, 0)
-        }
-        tabButtons.forEachIndexed { index, tab -> tab.setOnClickListener { showCategory(index) } }
-        showCategory(categories.indexOfFirst { (_, entries) ->
-            entries.any { it == selectedDhikr }
-        }.coerceAtLeast(0))
-
-        val actions = LinearLayout(this).apply { layoutDirection = View.LAYOUT_DIRECTION_RTL }
-        panel.addView(actions, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
-        if (selectedDhikr != null) {
-            actions.addView(actionButton("إلغاء اختيار الذكر").apply {
-                setOnClickListener {
-                    selectDhikr(null)
-                    dialog.dismiss()
-                }
-            }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(6) })
-        }
-        actions.addView(actionButton("إغلاق").apply {
-            setOnClickListener { dialog.dismiss() }
-        }, LinearLayout.LayoutParams(0, -2, 1f))
-        dialog.show()
-    }
-
-    private fun dialogPanel(title: String) = LinearLayout(this).apply {
+    private fun settingsCard(parent: LinearLayout, title: String) = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
-        layoutDirection = View.LAYOUT_DIRECTION_RTL
-        setPadding(dp(18), dp(18), dp(18), dp(18))
-        background = GradientDrawable(
-            GradientDrawable.Orientation.TL_BR,
-            intArrayOf(0xFF242548.toInt(), 0xFF11182B.toInt())
-        ).apply { cornerRadius = dp(20).toFloat() }
-        addView(arabicText(title, 21f, 0xFFB7F1E8.toInt()), LinearLayout.LayoutParams(-1, -2).apply {
-            bottomMargin = dp(14)
-        })
+        setPadding(dp(13), dp(11), dp(13), dp(11))
+        background = borderedSurface(0xFF1A2435.toInt(), 0xFF2E3A51.toInt(), 14)
+        addView(arabicText(title, 16f, 0xFFCBD2EF.toInt()).apply {
+            setTypeface(typeface, Typeface.BOLD)
+        }, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(7) })
+        parent.addView(this, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
+    }
+
+    private fun borderedSurface(fill: Int, border: Int, radius: Int) = GradientDrawable().apply {
+        cornerRadius = dp(radius).toFloat()
+        setColor(fill)
+        setStroke(dp(1), border)
     }
 
     private fun createPanelDialog(panel: LinearLayout) =
@@ -402,12 +448,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun actionBackground(selected: Boolean) = RippleDrawable(
-        ColorStateList.valueOf(0x3385E1D5),
-        GradientDrawable().apply {
-            cornerRadius = dp(12).toFloat()
-            setColor(if (selected) 0xFF215457.toInt() else 0xFF1C263D.toInt())
-            setStroke(dp(1), if (selected) 0xFF85E1D5.toInt() else 0xFF394362.toInt())
-        },
+        ColorStateList.valueOf(0x269EAED6),
+        borderedSurface(
+            if (selected) 0xFF364566.toInt() else 0xFF1C263D.toInt(),
+            if (selected) 0xFF7687AD.toInt() else 0xFF394362.toInt(),
+            12
+        ),
         null
     )
 
@@ -449,10 +495,26 @@ class MainActivity : AppCompatActivity() {
         refreshCount()
     }
 
-    private fun countTap() {
-        incrementCount()
-        canvasView.playTapRipple()
-        if (soundEnabled) clickTone?.startTone(ToneGenerator.TONE_PROP_BEEP, 45)
+    private fun enableCounting(view: View) {
+        view.isSoundEffectsEnabled = false
+        view.setOnTouchListener { _, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN, MotionEvent.ACTION_CANCEL -> tapPoint = null
+                MotionEvent.ACTION_UP -> {
+                    val origin = IntArray(2)
+                    canvasView.getLocationOnScreen(origin)
+                    tapPoint = PointF(event.rawX - origin[0], event.rawY - origin[1])
+                }
+            }
+            false
+        }
+        view.setOnClickListener {
+            incrementCount()
+            val point = tapPoint
+            tapPoint = null
+            if (point != null) canvasView.playTapRipple(point.x, point.y)
+            if (soundEnabled) clickTone?.startTone(ToneGenerator.TONE_PROP_BEEP, 45)
+        }
     }
 
     private fun refreshCount() {
@@ -468,11 +530,13 @@ class MainActivity : AppCompatActivity() {
         ContextCompat.startForegroundService(this, lockedCounterIntent)
         clickTone = runCatching { ToneGenerator(AudioManager.STREAM_MUSIC, 35) }.getOrNull()
         refreshCount()
+        showDailyReminder()
     }
 
     override fun onPause() {
         LockedCounterService.activityVisible = false
         handler.postDelayed(stopCounterIfUnlocked, 250L)
+        handler.removeCallbacks(dailyReminder)
         clickTone?.release()
         clickTone = null
         super.onPause()
