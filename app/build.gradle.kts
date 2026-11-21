@@ -11,8 +11,8 @@ android {
         applicationId = "com.tasbih.counter"
         minSdk = 24
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 13
+        versionName = "0.13"
     }
 
     buildTypes {
@@ -32,5 +32,4 @@ android {
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
-    implementation("androidx.media:media:1.7.0")
 }

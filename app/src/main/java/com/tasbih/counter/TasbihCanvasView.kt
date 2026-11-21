@@ -1,8 +1,11 @@
 package com.tasbih.counter
 
+import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.*
+import android.os.SystemClock
 import android.view.View
+import android.view.animation.AccelerateDecelerateInterpolator
 import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.sin
@@ -11,6 +14,39 @@ class TasbihCanvasView(context: Context) : View(context) {
 
     companion object {
         const val BEADS_PER_CYCLE = 33
+        private const val CENTER_POSITION = 0.54f
+        private const val LOWER_POSITION = 0.69f
+        const val MOVE_DURATION = 320L
+        private const val RIPPLE_DURATION = 470L
+    }
+
+    private var verticalPosition = CENTER_POSITION
+    private var positionAnimator: ValueAnimator? = null
+    private val ringRadius get() = min(width * 0.35f, height * 0.24f)
+    val lowerRingTop get() = (height * LOWER_POSITION - ringRadius * 1.12f).toInt()
+
+    fun positionBelowDhikr(selected: Boolean, animate: Boolean) {
+        positionAnimator?.cancel()
+        val target = if (selected) LOWER_POSITION else CENTER_POSITION
+        if (!animate || verticalPosition == target) {
+            verticalPosition = target
+            invalidate()
+            return
+        }
+        positionAnimator = ValueAnimator.ofFloat(verticalPosition, target).apply {
+            duration = MOVE_DURATION
+            interpolator = AccelerateDecelerateInterpolator()
+            addUpdateListener {
+                verticalPosition = it.animatedValue as Float
+                invalidate()
+            }
+            start()
+        }
+    }
+
+    override fun onDetachedFromWindow() {
+        positionAnimator?.end()
+        super.onDetachedFromWindow()
     }
 
     var count: Int = 0
@@ -20,6 +56,20 @@ class TasbihCanvasView(context: Context) : View(context) {
         }
 
     private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val rippleStarts = mutableListOf<Long>()
+    private val ripplePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        shader = SweepGradient(
+            0f, 0f,
+            intArrayOf(0xFF45E5CC.toInt(), 0xFF62A5FF.toInt(), 0xFFBA88FF.toInt(), 0xFF45E5CC.toInt()),
+            null
+        )
+    }
+
+    fun playTapRipple() {
+        rippleStarts.add(SystemClock.uptimeMillis())
+        invalidate()
+    }
     private val centerCirclePaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val beadPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -47,14 +97,14 @@ class TasbihCanvasView(context: Context) : View(context) {
         super.onSizeChanged(w, h, oldw, oldh)
         if (w == 0 || h == 0) return
 
-        val radius = min(w, h) * 0.35f
+        val radius = ringRadius
         bgPaint.shader = RadialGradient(
             w * 0.46f, h * 0.53f, radius * 2.6f,
             intArrayOf(0xFF28264F.toInt(), 0xFF141B30.toInt(), 0xFF090D16.toInt()),
             floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP
         )
         centerCirclePaint.shader = RadialGradient(
-            w / 2f, h * 0.54f, radius * 0.65f,
+            0f, 0f, radius * 0.65f,
             intArrayOf(0xFF182033.toInt(), 0xFF111A2B.toInt(), 0xFF384D76.toInt()),
             floatArrayOf(0f, 0.74f, 1f), Shader.TileMode.CLAMP
         )
@@ -82,12 +132,15 @@ class TasbihCanvasView(context: Context) : View(context) {
         if (width == 0 || height == 0) return
         canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), bgPaint)
         val cx = width / 2f
-        val cy = height * 0.54f
-        val baseRadius = min(width, height) * 0.35f
+        val cy = height * verticalPosition
+        val baseRadius = ringRadius
         val centerRadius = baseRadius * 0.65f
         val beadRadius = baseRadius * 0.07f
 
-        canvas.drawCircle(cx, cy, centerRadius, centerCirclePaint)
+        canvas.save()
+        canvas.translate(cx, cy)
+        canvas.drawCircle(0f, 0f, centerRadius, centerCirclePaint)
+        canvas.restore()
 
         val beadIndex = (count - 1).coerceAtLeast(0)
         val level = beadIndex / BEADS_PER_CYCLE % activeBeads.size
@@ -109,6 +162,22 @@ class TasbihCanvasView(context: Context) : View(context) {
             if (i < coloredBeads) canvas.drawCircle(0f, 0f, beadRadius * 1.65f, glowPaint)
             canvas.drawCircle(0f, 0f, beadRadius, beadPaint)
             canvas.restore()
+        }
+
+        if (rippleStarts.isNotEmpty()) {
+            val now = SystemClock.uptimeMillis()
+            rippleStarts.removeAll { now - it >= RIPPLE_DURATION }
+            canvas.save()
+            canvas.translate(cx, cy)
+            for (started in rippleStarts) {
+                val progress = (now - started).toFloat() / RIPPLE_DURATION
+                val eased = 1f - (1f - progress) * (1f - progress)
+                ripplePaint.alpha = (210 * (1f - progress)).toInt()
+                ripplePaint.strokeWidth = baseRadius * (0.035f - 0.02f * progress)
+                canvas.drawCircle(0f, 0f, baseRadius * (0.68f + 0.52f * eased), ripplePaint)
+            }
+            canvas.restore()
+            if (rippleStarts.isNotEmpty()) postInvalidateOnAnimation()
         }
 
         labelPaint.color = 0xFF85C2C9.toInt()
